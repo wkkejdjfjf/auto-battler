@@ -1,0 +1,9 @@
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+
+public class Positions : MonoBehaviour
+{
+    public bool occupied;
+    public GameObject obj;
+}
