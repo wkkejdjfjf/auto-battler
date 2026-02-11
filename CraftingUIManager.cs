@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using System.Collections;
@@ -7,439 +7,229 @@ using System.Collections.Generic;
 public class CraftingUIManager : MonoBehaviour
 {
     [Header("References")]
-    public CraftingSystem craftingSystem;
+    [SerializeField] private CraftingSystem craftingSystem;
 
-    [Header("Fragment Display")]
-    public TMP_Text commonFragmentText;
-    public TMP_Text rareFragmentText;
-    public TMP_Text epicFragmentText;
-    public TMP_Text legendaryFragmentText;
-    public TMP_Text mythicalFragmentText;
+    [System.Serializable]
+    public class FragmentUIEntry
+    {
+        public Rarity rarity;
+        public TMP_Text amountText;
+        public TMP_Text costText;
+        public TMP_Text progressText;
+        public Button craftButton;
+    }
 
-    [Header("Fragment Cost Display")]
-    public TMP_Text commonCostText;
-    public TMP_Text rareCostText;
-    public TMP_Text epicCostText;
-    public TMP_Text legendaryCostText;
-    public TMP_Text mythicalCostText;
+    [Header("Fragment UI")]
+    [SerializeField] private List<FragmentUIEntry> fragmentEntries;
 
-    [Header("Collection Progress")]
-    public TMP_Text commonProgressText;
-    public TMP_Text rareProgressText;
-    public TMP_Text epicProgressText;
-    public TMP_Text legendaryProgressText;
-    public TMP_Text mythicalProgressText;
+    [Header("Weapon Collection")]
+    [SerializeField] private Transform weaponCollectionContainer;
+    [SerializeField] private WeaponItemUI weaponCollectionItemPrefab;
+    [SerializeField] private TextMeshProUGUI soulEssenceText;
 
     [Header("Craft Result")]
-    public GameObject weaponCraftingPanel;
-    public Transform craftingResultContainer;
-    public GameObject weaponCraftResultPrefab;
-    public TMP_Text craftResultMessageText;
+    [SerializeField] private Transform craftingResultContainer;
+    [SerializeField] private GameObject weaponCraftResultPrefab;
+    [SerializeField] private TMP_Text craftResultMessageText;
 
-    [Header("Weapon Collection Panel")]
-    public Transform weaponCollectionContainer;
-    public GameObject weaponCollectionItemPrefab;
+    private Dictionary<string, WeaponItemUI> collectionItems = new Dictionary<string, WeaponItemUI>();
 
-    private Dictionary<string, GameObject> collectionItems = new Dictionary<string, GameObject>();
+    #region Unity Lifecycle
 
-    private bool isUpdatingUI = false;
-    private const float UI_UPDATE_INTERVAL = 2.0f;
-
-    private static readonly int[] FRAGMENT_COSTS = { 50, 75, 100, 150, 200 };
-    private static readonly string[] FRAGMENT_IDS =
+    private void Start()
     {
-        "CommonFragment",
-        "RareFragment",
-        "EpicFragment",
-        "LegendaryFragment",
-        "MythicalFragment"
-    };
-
-    void Start()
-    {
-        craftingSystem.OnInventoryChanged += OnInventoryChangedHandler;
-        craftingSystem.OnResourceUnlocked += OnResourceUnlockedHandler;
-
-        RefreshFragmentCounts();
-        RefreshFragmentCosts();
-        RefreshCollectionProgress();
-        RefreshWeaponCollection();
-
-        StartCoroutine(PeriodicUIUpdate());
-    }
-
-    void OnDestroy()
-    {
-        if (craftingSystem != null)
+        if (craftingSystem == null)
         {
-            craftingSystem.OnInventoryChanged -= OnInventoryChangedHandler;
-            craftingSystem.OnResourceUnlocked -= OnResourceUnlockedHandler;
+            Debug.LogError("CraftingSystem reference missing!");
+            return;
         }
 
-        StopAllCoroutines();
-        collectionItems.Clear();
+        craftingSystem.OnInventoryChanged += RefreshAllUI;
+        craftingSystem.OnResourceUnlocked += _ => RefreshFragments();
+
+        RefreshAllUI();
+        BuildWeaponCollection();
     }
 
-    private void OnInventoryChangedHandler()
+    private void OnDestroy()
     {
-        if (!isUpdatingUI)
-            StartCoroutine(ThrottledUIUpdate());
+        if (craftingSystem == null) return;
+
+        craftingSystem.OnInventoryChanged -= RefreshAllUI;
     }
 
-    private void OnResourceUnlockedHandler(string resourceId)
+    #endregion
+
+    #region Main Refresh
+
+private void RefreshAllUI()
+{
+    RefreshFragments();
+    RefreshWeaponCollection();
+    RefreshSoulEssence();
+}
+
+
+    #endregion
+
+    #region Fragment UI
+
+    private void RefreshSoulEssence()
     {
-        RefreshFragmentCounts();
-        RefreshCollectionProgress();
+        if (soulEssenceText == null) return;
+
+        int essenceAmount = craftingSystem.GetSoulEssenceAmount();
+        soulEssenceText.text = $"Soul Essence: {BigNumberFormatter.Format(essenceAmount, 0)}";
     }
 
-    private IEnumerator ThrottledUIUpdate()
+
+    private void RefreshFragments()
     {
-        isUpdatingUI = true;
-        yield return new WaitForSeconds(0.1f);
-
-        RefreshFragmentCounts();
-        RefreshCollectionProgress();
-        RefreshWeaponCollectionValues();
-
-        isUpdatingUI = false;
-    }
-
-    private IEnumerator PeriodicUIUpdate()
-    {
-        while (true)
+        foreach (var entry in fragmentEntries)
         {
-            yield return new WaitForSeconds(UI_UPDATE_INTERVAL);
+            string fragmentId = GetFragmentId(entry.rarity);
+            int amount = craftingSystem.GetResourceAmount(fragmentId);
+            int cost = GetFragmentCost(entry.rarity);
 
-            if (!isUpdatingUI)
-            {
-                RefreshFragmentCounts();
-                RefreshCollectionProgress();
-                RefreshWeaponCollectionValues();
-            }
+            if (entry.amountText != null)
+                entry.amountText.text = BigNumberFormatter.Format(amount, 0);
+
+            if (entry.costText != null)
+                entry.costText.text = cost.ToString();
+
+            if (entry.progressText != null)
+                entry.progressText.text =
+                    craftingSystem.GetCollectionProgressText(entry.rarity);
+
+            if (entry.craftButton != null)
+                entry.craftButton.interactable = amount >= cost;
         }
     }
 
-    // ─── Fragment Count Display ───────────────────────────────────────────────
+    #endregion
 
-    private void RefreshFragmentCounts()
+    #region Weapon Collection
+
+    private void BuildWeaponCollection()
     {
-        SetFragmentText(commonFragmentText, "CommonFragment");
-        SetFragmentText(rareFragmentText, "RareFragment");
-        SetFragmentText(epicFragmentText, "EpicFragment");
-        SetFragmentText(legendaryFragmentText, "LegendaryFragment");
-        SetFragmentText(mythicalFragmentText, "MythicalFragment");
-    }
-
-    private void SetFragmentText(TMP_Text label, string fragmentId)
-    {
-        if (label == null) return;
-        label.text = BigNumberFormatter.Format(craftingSystem.GetResourceAmount(fragmentId), 0);
-    }
-
-    private void RefreshFragmentCosts()
-    {
-        if (commonCostText != null) commonCostText.text = $"{FRAGMENT_COSTS[0]}";
-        if (rareCostText != null) rareCostText.text = $"{FRAGMENT_COSTS[1]}";
-        if (epicCostText != null) epicCostText.text = $"{FRAGMENT_COSTS[2]}";
-        if (legendaryCostText != null) legendaryCostText.text = $"{FRAGMENT_COSTS[3]}";
-        if (mythicalCostText != null) mythicalCostText.text = $"{FRAGMENT_COSTS[4]}";
-    }
-
-    // ─── Collection Progress ─────────────────────────────────────────────────
-
-    private void RefreshCollectionProgress()
-    {
-        SetProgressText(commonProgressText, Rarity.Common);
-        SetProgressText(rareProgressText, Rarity.Rare);
-        SetProgressText(epicProgressText, Rarity.Epic);
-        SetProgressText(legendaryProgressText, Rarity.Legendary);
-        SetProgressText(mythicalProgressText, Rarity.Mythical);
-    }
-
-    private void SetProgressText(TMP_Text label, Rarity rarity)
-    {
-        if (label == null) return;
-        label.text = craftingSystem.GetCollectionProgressText(rarity);
-    }
-
-    // ─── Weapon Collection Panel ─────────────────────────────────────────────
-
-    private void RefreshWeaponCollection()
-    {
-        if (weaponCollectionContainer == null || weaponCollectionItemPrefab == null) return;
-
         foreach (Transform child in weaponCollectionContainer)
             Destroy(child.gameObject);
 
         collectionItems.Clear();
 
-        foreach (var pair in craftingSystem.craftedItemsData)
+        foreach (var pair in craftingSystem.GetCraftedItems())
         {
-            string itemId = pair.Key;
-            ItemData itemData = pair.Value;
-
-            CraftableItemSO weapon = craftingSystem.GetCraftableItemData(itemId);
-            if (weapon == null || !weapon.canSocketToSoulWeapon) continue;
-
-            CreateCollectionItemUI(itemId, weapon, itemData);
+            CreateOrUpdateItem(pair.Key, pair.Value);
         }
     }
 
-    private void CreateCollectionItemUI(string itemId, CraftableItemSO weapon, ItemData itemData)
+    private void RefreshWeaponCollection()
     {
-        GameObject item = Instantiate(weaponCollectionItemPrefab, weaponCollectionContainer);
-        item.name = "WeaponCollect_" + itemId;
-
-        TMP_Text nameText = item.transform.Find("NameText").GetComponent<TMP_Text>();
-        TMP_Text rarityText = item.transform.Find("RarityText").GetComponent<TMP_Text>();
-        TMP_Text levelText = item.transform.Find("LevelText").GetComponent<TMP_Text>();
-        TMP_Text bonusText = item.transform.Find("BonusText").GetComponent<TMP_Text>();
-        Image iconImage = item.transform.Find("IconImage").GetComponent<Image>();
-        Button upgradeBtn = item.transform.Find("UpgradeButton").GetComponent<Button>();
-        Image levelBarFill = item.transform.Find("LevelBarFill").GetComponent<Image>();
-
-        if (nameText != null) nameText.text = weapon.displayName;
-        if (rarityText != null) rarityText.text = weapon.rarity.ToString();
-        if (levelText != null) levelText.text = $"Lv {itemData.level}/{weapon.maxLevel}";
-        if (bonusText != null) bonusText.text = weapon.GetCompleteStatDescription(itemData.level);
-
-        if (iconImage != null)
+        foreach (var pair in craftingSystem.GetCraftedItems())
         {
-            if (weapon.icon != null)
-            {
-                iconImage.sprite = weapon.icon;
-                iconImage.enabled = true;
-            }
-            else
-            {
-                iconImage.enabled = false;
-            }
+            CreateOrUpdateItem(pair.Key, pair.Value);
         }
-
-        if (levelBarFill != null)
-        {
-            float progress = itemData.copiesForNextLevel > 0
-                ? Mathf.Clamp01((float)itemData.count / itemData.copiesForNextLevel)
-                : 1f;
-            levelBarFill.fillAmount = progress;
-        }
-
-        if (upgradeBtn != null)
-        {
-            if (itemData.level < weapon.maxLevel)
-            {
-                upgradeBtn.gameObject.SetActive(true);
-                upgradeBtn.interactable = craftingSystem.CanLevelUp(itemId);
-
-                string capturedId = itemId;
-                upgradeBtn.onClick.RemoveAllListeners();
-                upgradeBtn.onClick.AddListener(() => TryLevelUp(capturedId));
-
-                HoldClickableButton holdBtn = upgradeBtn.GetComponent<HoldClickableButton>();
-                if (holdBtn != null)
-                {
-                    System.Action action = () => TryLevelUp(capturedId);
-                    holdBtn.OnClicked += action;
-                    holdBtn.OnHoldClicked += action;
-                    holdBtn._debugMode = false;
-                }
-            }
-            else
-            {
-                upgradeBtn.gameObject.SetActive(false);
-            }
-        }
-
-        collectionItems[itemId] = item;
     }
 
-    private void RefreshWeaponCollectionValues()
+    private void CreateOrUpdateItem(string itemId, ItemData data)
     {
-        if (weaponCollectionContainer == null) return;
+        CraftableItemSO weapon = craftingSystem.GetCraftableItemData(itemId);
+        if (weapon == null || !weapon.canSocketToSoulWeapon)
+            return;
 
-        foreach (var pair in craftingSystem.craftedItemsData)
+        if (!collectionItems.TryGetValue(itemId, out var uiItem))
         {
-            string itemId = pair.Key;
-            ItemData itemData = pair.Value;
-
-            CraftableItemSO weapon = craftingSystem.GetCraftableItemData(itemId);
-            if (weapon == null || !weapon.canSocketToSoulWeapon) continue;
-
-            if (!collectionItems.TryGetValue(itemId, out GameObject item))
-            {
-                CreateCollectionItemUI(itemId, weapon, itemData);
-                continue;
-            }
-
-            TMP_Text levelText = item.transform.Find("LevelText").GetComponent<TMP_Text>();
-            TMP_Text bonusText = item.transform.Find("BonusText").GetComponent<TMP_Text>();
-            Image levelBarFill = item.transform.Find("LevelBarFill").GetComponent<Image>();
-            Button upgradeBtn = item.transform.Find("UpgradeButton").GetComponent<Button>();
-
-            if (levelText != null) levelText.text = $"Lv {itemData.level}/{weapon.maxLevel}";
-            if (bonusText != null) bonusText.text = weapon.GetCompleteStatDescription(itemData.level);
-
-            if (levelBarFill != null)
-            {
-                float progress = itemData.copiesForNextLevel > 0
-                    ? Mathf.Clamp01((float)itemData.count / itemData.copiesForNextLevel)
-                    : 1f;
-                levelBarFill.fillAmount = progress;
-            }
-
-            if (upgradeBtn != null)
-            {
-                if (itemData.level < weapon.maxLevel)
-                {
-                    upgradeBtn.gameObject.SetActive(true);
-                    upgradeBtn.interactable = craftingSystem.CanLevelUp(itemId);
-                }
-                else
-                {
-                    upgradeBtn.gameObject.SetActive(false);
-                }
-            }
+            uiItem = Instantiate(weaponCollectionItemPrefab, weaponCollectionContainer);
+            collectionItems[itemId] = uiItem;
         }
+
+        uiItem.Setup(itemId, weapon, data, craftingSystem);
     }
 
-    // ─── Level Up ────────────────────────────────────────────────────────────
+    #endregion
 
-    private void TryLevelUp(string itemId)
-    {
-        if (craftingSystem.LevelUpItem(itemId))
-        {
-            if (!isUpdatingUI)
-                StartCoroutine(ThrottledUIUpdate());
-        }
-    }
-
-    // ─── Craft Buttons (called from Unity UI) ────────────────────────────────
+    #region Crafting
 
     public void OnCraftWeaponClicked(int rarityIndex)
     {
         Rarity rarity = (Rarity)rarityIndex;
-        StartCoroutine(CraftWeaponAnimation(rarity));
+        StartCoroutine(CraftWeaponRoutine(rarity));
     }
 
-    public void OnCraftMultipleClicked(int rarityIndex)
+    private IEnumerator CraftWeaponRoutine(Rarity rarity)
     {
-        Rarity rarity = (Rarity)rarityIndex;
-        StartCoroutine(CraftMultipleAnimation(rarity, 10));
-    }
-
-    // ─── Craft Animations ────────────────────────────────────────────────────
-
-    private IEnumerator CraftWeaponAnimation(Rarity rarity)
-    {
-        if (craftingResultContainer != null)
-        {
-            foreach (Transform child in craftingResultContainer)
-                Destroy(child.gameObject);
-        }
+        ClearCraftResultUI();
 
         if (craftResultMessageText != null)
             craftResultMessageText.text = "Crafting...";
 
-        yield return new WaitForSeconds(1.5f);
+        yield return new WaitForSeconds(1f);
 
-        CraftableItemSO craftedWeapon = craftingSystem.CraftRandomWeapon(rarity);
+        CraftableItemSO weapon = craftingSystem.CraftRandomWeapon(rarity);
 
-        if (craftedWeapon == null)
+        if (weapon == null)
         {
             if (craftResultMessageText != null)
-                craftResultMessageText.text = $"Not enough {rarity} Fragments! Need {FRAGMENT_COSTS[(int)rarity]}.";
+                craftResultMessageText.text = "Not enough fragments!";
             yield break;
         }
 
-        yield return new WaitForSeconds(0.5f);
+        bool isDuplicate = craftingSystem.IsDuplicate(weapon.itemId);
 
-        bool isDuplicate = craftingSystem.craftedItemsData.TryGetValue(craftedWeapon.itemId, out ItemData data)
-                           && data.count > 1;
+        DisplayCraftedWeapon(weapon, isDuplicate);
 
         if (craftResultMessageText != null)
-        {
             craftResultMessageText.text = isDuplicate
-                ? $"Duplicate! Converted to Soul Essence."
-                : $"NEW weapon unlocked!";
-        }
-
-        DisplayCraftedWeapon(craftedWeapon, isDuplicate);
-
-        yield return new WaitForSeconds(2f);
+                ? "Duplicate! Converted."
+                : "NEW Weapon!";
     }
 
-    private IEnumerator CraftMultipleAnimation(Rarity rarity, int count)
+    private void ClearCraftResultUI()
     {
-        if (craftingResultContainer != null)
-        {
-            foreach (Transform child in craftingResultContainer)
-                Destroy(child.gameObject);
-        }
-
-        if (craftResultMessageText != null)
-            craftResultMessageText.text = $"Crafting x{count}...";
-
-        List<CraftableItemSO> craftedWeapons = craftingSystem.CraftMultipleWeapons(rarity, count);
-
-        if (craftedWeapons.Count == 0)
-        {
-            if (craftResultMessageText != null)
-                craftResultMessageText.text = $"Not enough {rarity} Fragments! Need {FRAGMENT_COSTS[(int)rarity]}.";
-            yield break;
-        }
-
-        foreach (var weapon in craftedWeapons)
-        {
-            bool isDuplicate = craftingSystem.craftedItemsData.TryGetValue(weapon.itemId, out ItemData data)
-                               && data.count > 1;
-            DisplayCraftedWeapon(weapon, isDuplicate);
-            yield return new WaitForSeconds(0.3f);
-        }
-
-        if (craftResultMessageText != null)
-            craftResultMessageText.text = $"Crafted {craftedWeapons.Count} weapons!";
+        foreach (Transform child in craftingResultContainer)
+            Destroy(child.gameObject);
     }
 
     private void DisplayCraftedWeapon(CraftableItemSO weapon, bool isDuplicate)
     {
-        if (craftingResultContainer == null || weaponCraftResultPrefab == null) return;
-
         GameObject resultUI = Instantiate(weaponCraftResultPrefab, craftingResultContainer);
 
-        Image weaponIcon = resultUI.transform.Find("WeaponIcon")?.GetComponent<Image>();
-        if (weaponIcon != null && weapon.icon != null)
-            weaponIcon.sprite = weapon.icon;
+        resultUI.GetComponentInChildren<Image>().sprite = weapon.icon;
 
-        TMP_Text weaponName = resultUI.transform.Find("WeaponName")?.GetComponent<TMP_Text>();
-        if (weaponName != null)
-            weaponName.text = weapon.displayName;
-
-        TMP_Text duplicateLabel = resultUI.transform.Find("DuplicateLabel")?.GetComponent<TMP_Text>();
-        if (duplicateLabel != null)
-            duplicateLabel.gameObject.SetActive(isDuplicate);
-
-        Image frame = resultUI.GetComponent<Image>();
-        if (frame != null)
-            frame.color = GetRarityColor(weapon.rarity);
+        var text = resultUI.GetComponentInChildren<TMP_Text>();
+        if (text != null)
+            text.text = weapon.displayName;
     }
 
-    // ─── Utility ─────────────────────────────────────────────────────────────
+    #endregion
 
-    private Color GetRarityColor(Rarity rarity)
+    #region Utility
+
+    private string GetFragmentId(Rarity rarity)
     {
         switch (rarity)
         {
-            case Rarity.Common: return new Color(0.8f, 0.8f, 0.8f);
-            case Rarity.Rare: return new Color(0.3f, 0.8f, 0.3f);
-            case Rarity.Epic: return new Color(0.6f, 0.3f, 0.9f);
-            case Rarity.Legendary: return new Color(1f, 0.7f, 0.2f);
-            case Rarity.Mythical: return new Color(1f, 0.2f, 0.2f);
-            default: return Color.white;
+            case Rarity.Common: return "CommonFragment";
+            case Rarity.Rare: return "RareFragment";
+            case Rarity.Epic: return "EpicFragment";
+            case Rarity.Legendary: return "LegendaryFragment";
+            case Rarity.Mythical: return "MythicalFragment";
+            default: return "CommonFragment";
         }
     }
 
-    public void AddResource(string resourceId, int amount)
+    private int GetFragmentCost(Rarity rarity)
     {
-        craftingSystem.AddResource(resourceId, amount);
+        switch (rarity)
+        {
+            case Rarity.Common: return 50;
+            case Rarity.Rare: return 75;
+            case Rarity.Epic: return 100;
+            case Rarity.Legendary: return 150;
+            case Rarity.Mythical: return 200;
+            default: return 50;
+        }
     }
+
+    #endregion
 }
